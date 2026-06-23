@@ -1,0 +1,484 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>거래량 신호 모니터 — 멀티 종목</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --ink:#0B1220; --panel:#121B2D; --panel-2:#17233A; --line:#27344C;
+    --text:#E7ECF5; --muted:#7C8AA5;
+    --buy:#2BD576; --buy-dim:#173023;
+    --sell:#FF5470; --sell-dim:#341520;
+    --amber:#F2B84B;
+  }
+  *{box-sizing:border-box;}
+  body{margin:0;background:var(--ink);color:var(--text);font-family:'Inter',sans-serif;-webkit-font-smoothing:antialiased;}
+  h1,h2,h3{font-family:'Space Grotesk',sans-serif;margin:0;}
+  .mono{font-family:'IBM Plex Mono',monospace;}
+
+  .ticker-wrap{background:#0E1626;border-bottom:1px solid var(--line);overflow:hidden;white-space:nowrap;padding:8px 0;}
+  .ticker{display:inline-block;padding-left:100%;animation:scroll 26s linear infinite;}
+  .ticker span{display:inline-block;margin:0 26px;font-family:'IBM Plex Mono',monospace;font-size:12.5px;color:var(--muted);}
+  .ticker span b{color:var(--text);font-weight:600;}
+  .ticker .buyTxt{color:var(--buy);font-weight:700;}
+  .ticker .sellTxt{color:var(--sell);font-weight:700;}
+  @keyframes scroll{from{transform:translateX(0);}to{transform:translateX(-100%);}}
+  @media (prefers-reduced-motion: reduce){.ticker{animation:none;padding-left:16px;}}
+
+  .wrap{max-width:1080px;margin:0 auto;padding:28px 20px 60px;}
+  header.page{margin-bottom:22px;}
+  header.page .eyebrow{color:var(--amber);font-size:12px;letter-spacing:.12em;text-transform:uppercase;font-weight:600;margin-bottom:8px;}
+  header.page h1{font-size:25px;font-weight:700;}
+  header.page p{color:var(--muted);font-size:13.5px;margin-top:6px;line-height:1.6;}
+
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:20px;margin-bottom:18px;}
+  .controls{display:flex;flex-wrap:wrap;gap:12px;align-items:end;}
+  .field{display:flex;flex-direction:column;gap:6px;}
+  .field label{font-size:12px;color:var(--muted);font-weight:500;}
+  input[type=text]{background:var(--panel-2);border:1px solid var(--line);color:var(--text);border-radius:9px;padding:10px 12px;font-size:14px;font-family:'IBM Plex Mono',monospace;width:180px;}
+  select{background:var(--panel-2);border:1px solid var(--line);color:var(--text);border-radius:9px;padding:10px 12px;font-size:14px;width:150px;}
+  input:focus,select:focus,button:focus,textarea:focus{outline:2px solid var(--amber);outline-offset:1px;}
+  button{background:var(--amber);color:#1A1300;border:none;border-radius:9px;padding:11px 18px;font-size:14px;font-weight:600;cursor:pointer;transition:transform .12s ease, opacity .12s ease;}
+  button:hover{opacity:.9;}
+  button:active{transform:translateY(1px);}
+  button:disabled{opacity:.45;cursor:not-allowed;}
+  button.secondary{background:transparent;color:var(--text);border:1px solid var(--line);}
+  button.tiny{padding:4px 9px;font-size:11px;border-radius:7px;}
+  .status-line{font-size:12.5px;color:var(--muted);margin-top:10px;min-height:18px;}
+  .status-line.err{color:var(--sell);}
+  .status-line.ok{color:var(--buy);}
+
+  .chips{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px;}
+  .chip{display:flex;align-items:center;gap:8px;background:var(--panel-2);border:1px solid var(--line);border-radius:20px;padding:6px 6px 6px 14px;font-family:'IBM Plex Mono',monospace;font-size:13px;}
+  .chip button{background:none;border:none;color:var(--muted);font-size:15px;line-height:1;padding:2px 8px;border-radius:50%;cursor:pointer;}
+  .chip button:hover{color:var(--sell);background:rgba(255,84,112,.12);}
+  .chips.empty-hint{color:var(--muted);font-size:12.5px;font-family:'Inter',sans-serif;}
+
+  details summary{cursor:pointer;color:var(--muted);font-size:13px;font-weight:500;list-style:none;}
+  details summary::-webkit-details-marker{display:none;}
+  details summary:before{content:'▸ ';}
+  details[open] summary:before{content:'▾ ';}
+  .settings-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-top:14px;}
+  .settings-grid .field input,.settings-grid .field select{width:100%;}
+  .paste-area{margin-top:14px;}
+  textarea{width:100%;min-height:90px;background:var(--panel-2);border:1px solid var(--line);color:var(--text);border-radius:9px;padding:10px 12px;font-family:'IBM Plex Mono',monospace;font-size:12px;resize:vertical;}
+
+  .stocks-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:14px;}
+  .stock-card{border:1px solid var(--line);border-radius:12px;padding:16px;background:var(--panel-2);cursor:pointer;transition:border-color .15s ease;position:relative;}
+  .stock-card:hover{border-color:var(--amber);}
+  .stock-card.selected{outline:2px solid var(--amber);outline-offset:1px;}
+  .stock-card.buy{border-color:var(--buy);background:var(--buy-dim);}
+  .stock-card.sell{border-color:var(--sell);background:var(--sell-dim);}
+  .stock-card .topline{display:flex;justify-content:space-between;align-items:baseline;}
+  .stock-card .code{font-family:'IBM Plex Mono',monospace;font-size:13px;color:var(--muted);}
+  .stock-card .removeX{background:none;border:none;color:var(--muted);font-size:14px;cursor:pointer;padding:2px 6px;}
+  .stock-card .removeX:hover{color:var(--sell);}
+  .stock-card .close{font-size:22px;font-weight:700;font-family:'IBM Plex Mono',monospace;margin-top:6px;}
+  .stock-card .badge{font-weight:700;font-size:13px;margin-top:8px;}
+  .stock-card.buy .badge{color:var(--buy);}
+  .stock-card.sell .badge{color:var(--sell);}
+  .stock-card .badge.none{color:var(--muted);}
+  .stock-card .reason{font-size:11px;color:var(--muted);margin-top:4px;line-height:1.5;min-height:28px;}
+  .stock-card .spinner{font-size:12.5px;color:var(--muted);}
+
+  table{width:100%;border-collapse:collapse;font-family:'IBM Plex Mono',monospace;font-size:12.5px;margin-top:4px;}
+  thead th{position:sticky;top:0;background:var(--panel-2);color:var(--muted);font-weight:500;text-align:right;padding:9px 8px;border-bottom:1px solid var(--line);white-space:nowrap;font-size:11.5px;}
+  thead th:first-child, tbody td:first-child{text-align:left;}
+  tbody td{padding:8px 8px;text-align:right;border-bottom:1px solid #1B2740;white-space:nowrap;}
+  .table-scroll{max-height:440px;overflow:auto;border:1px solid var(--line);border-radius:10px;}
+  .pill{display:inline-block;padding:2px 8px;border-radius:6px;font-weight:600;font-size:11.5px;}
+  .pill.buy{background:rgba(43,213,118,.16);color:var(--buy);}
+  .pill.sell{background:rgba(255,84,112,.16);color:var(--sell);}
+  .pill.none{color:var(--muted);}
+
+  footer{color:var(--muted);font-size:11.5px;line-height:1.7;margin-top:22px;border-top:1px solid var(--line);padding-top:16px;}
+  .empty{color:var(--muted);font-size:13px;text-align:center;padding:30px 0;}
+</style>
+</head>
+<body>
+
+<div class="ticker-wrap"><div class="ticker mono" id="tickerStrip"><span>거래량 + 가격 패턴 기반 매수/매도 신호 모니터 — 종목을 추가하고 전체조회를 눌러주세요</span></div></div>
+
+<div class="wrap">
+  <header class="page">
+    <div class="eyebrow">Volume Signal Monitor · Multi-Watchlist</div>
+    <h1>거래량 기준 매수·매도 신호 모니터 (여러 종목)</h1>
+    <p>여러 종목코드를 등록해두면 한 화면에서 종목별 매수·매도 신호를 한눈에 비교할 수 있습니다. 카드를 클릭하면 해당 종목의 일별 내역이 아래에 펼쳐집니다.</p>
+  </header>
+
+  <div class="panel">
+    <div class="controls">
+      <div class="field">
+        <label for="codeInput">종목코드 추가 (6자리)</label>
+        <input type="text" id="codeInput" placeholder="예: 446770" maxlength="6">
+      </div>
+      <button class="secondary" id="addBtn" type="button">+ 추가</button>
+      <div class="field">
+        <label for="periodSelect">조회 기준</label>
+        <select id="periodSelect">
+          <option value="90">최근 3개월</option>
+          <option value="60d">최근 60거래일</option>
+        </select>
+      </div>
+      <button id="fetchAllBtn">전체 조회</button>
+      <button class="secondary" id="settingsToggleBtn" type="button">기준값 설정</button>
+    </div>
+
+    <div class="chips" id="chipsRow"></div>
+
+    <div class="status-line" id="statusLine">등록된 종목이 없습니다. 종목코드를 추가해주세요.</div>
+
+    <details id="settingsDetails">
+      <summary>기준값 설정 (펼치기)</summary>
+      <div class="settings-grid">
+        <div class="field"><label>거래량 이동평균 기간(N, 일)</label><input type="text" id="p_n" value="20"></div>
+        <div class="field"><label>거래량 급증 기준(배수)</label><input type="text" id="p_mult" value="2.0"></div>
+        <div class="field"><label>가격 돌파/이탈 비교기간(일)</label><input type="text" id="p_period" value="20"></div>
+        <div class="field"><label>저점 근접 허용범위(%)</label><input type="text" id="p_lowpct" value="3"></div>
+        <div class="field"><label>캔들 강도 기준(0~1)</label><input type="text" id="p_candle" value="0.6"></div>
+        <div class="field"><label>고점 근접 허용범위(%)</label><input type="text" id="p_highpct" value="3"></div>
+        <div class="field"><label>캔들 약세 기준(0~1)</label><input type="text" id="p_weak" value="0.4"></div>
+        <div class="field" style="grid-column:1/-1;">
+          <label>프록시 서버 URL (선택 — 직접 배포한 서버리스 프록시가 있다면 입력)</label>
+          <input type="text" id="p_proxy" style="width:100%;" placeholder="예: https://내프로젝트.vercel.app/api/stock">
+        </div>
+      </div>
+      <div class="paste-area">
+        <label style="font-size:12px;color:var(--muted);display:block;margin-bottom:6px;">실시간 조회가 막힐 경우 — 아래에서 종목을 고른 뒤, 네이버금융 일별시세 원본 데이터를 붙여넣고 계산하세요</label>
+        <div class="field" style="margin-bottom:8px;">
+          <label for="pasteCodeSelect">붙여넣을 데이터의 종목</label>
+          <select id="pasteCodeSelect" style="width:220px;"></select>
+        </div>
+        <textarea id="pasteBox" placeholder='["20260323", 57590, 58000, 56565, 56715, 240734, 0.01],&#10;["20260324", 59225, 59225, 57360, 58325, 239843, 0.01], ...'></textarea>
+        <div style="margin-top:8px;"><button class="secondary" id="pasteBtn" type="button">붙여넣은 데이터로 계산</button></div>
+      </div>
+    </details>
+  </div>
+
+  <div class="panel" id="emptyPanel">
+    <div class="empty">등록된 종목이 없습니다. 위에서 종목코드를 추가한 뒤 [전체 조회]를 눌러주세요.</div>
+  </div>
+
+  <div class="panel" id="gridPanel" style="display:none;">
+    <h3 style="margin-bottom:12px;font-size:15px;">종목 현황 (클릭하면 상세 내역 펼쳐짐)</h3>
+    <div class="stocks-grid" id="stocksGrid"></div>
+  </div>
+
+  <div class="panel" id="detailPanel" style="display:none;">
+    <h3 style="margin-bottom:12px;font-size:15px;" id="detailTitle">일별 신호 내역</h3>
+    <div class="table-scroll">
+      <table>
+        <thead><tr id="tableHead"></tr></thead>
+        <tbody id="tableBody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <footer>
+    실시간 조회는 공개 CORS 프록시를 거쳐 네이버금융 일별시세를 가져오며, 사내망·브라우저 정책에 따라 차단될 수 있습니다 — 그 경우 위 "기준값 설정"을 펼쳐 데이터를 직접 붙여넣어 주세요. 등록한 종목 목록은 새로고침하면 초기화됩니다(브라우저에 저장하지 않음).<br>
+    본 도구는 거래량·가격 패턴 기반의 기계적 보조 지표이며 투자 자문이 아닙니다. 최종 투자 판단과 책임은 본인에게 있습니다.
+  </footer>
+</div>
+
+<script>
+const els = {
+  codeInput: document.getElementById('codeInput'),
+  addBtn: document.getElementById('addBtn'),
+  period: document.getElementById('periodSelect'),
+  fetchAllBtn: document.getElementById('fetchAllBtn'),
+  settingsBtn: document.getElementById('settingsToggleBtn'),
+  settingsDetails: document.getElementById('settingsDetails'),
+  status: document.getElementById('statusLine'),
+  chipsRow: document.getElementById('chipsRow'),
+  pasteCodeSelect: document.getElementById('pasteCodeSelect'),
+  pasteBox: document.getElementById('pasteBox'),
+  pasteBtn: document.getElementById('pasteBtn'),
+  emptyPanel: document.getElementById('emptyPanel'),
+  gridPanel: document.getElementById('gridPanel'),
+  stocksGrid: document.getElementById('stocksGrid'),
+  detailPanel: document.getElementById('detailPanel'),
+  detailTitle: document.getElementById('detailTitle'),
+  tableHead: document.getElementById('tableHead'),
+  tableBody: document.getElementById('tableBody'),
+  ticker: document.getElementById('tickerStrip'),
+};
+
+let watchlist = [];
+const store = {};
+let selectedCode = null;
+
+els.settingsBtn.addEventListener('click', () => { els.settingsDetails.open = !els.settingsDetails.open; });
+
+function getParams(){
+  return {
+    N: parseInt(document.getElementById('p_n').value) || 20,
+    mult: parseFloat(document.getElementById('p_mult').value) || 2.0,
+    period: parseInt(document.getElementById('p_period').value) || 20,
+    lowPct: (parseFloat(document.getElementById('p_lowpct').value) || 3) / 100,
+    candle: parseFloat(document.getElementById('p_candle').value) || 0.6,
+    highPct: (parseFloat(document.getElementById('p_highpct').value) || 3) / 100,
+    weak: parseFloat(document.getElementById('p_weak').value) || 0.4,
+  };
+}
+
+function fmtDate(d){
+  const y=d.getFullYear(), m=String(d.getMonth()+1).padStart(2,'0'), day=String(d.getDate()).padStart(2,'0');
+  return `${y}${m}${day}`;
+}
+function toDisplayDate(yyyymmdd){
+  return `${yyyymmdd.slice(0,4)}-${yyyymmdd.slice(4,6)}-${yyyymmdd.slice(6,8)}`;
+}
+
+function extractRows(rawText){
+  const re = /\[\s*['"]?(\d{8})['"]?\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)/g;
+  const rows = []; let m;
+  while ((m = re.exec(rawText)) !== null){
+    rows.push({ date:m[1], open:+m[2], high:+m[3], low:+m[4], close:+m[5], volume:+m[6] });
+  }
+  rows.sort((a,b)=> a.date.localeCompare(b.date));
+  const seen = new Set(); const out=[];
+  for (const r of rows){ if(!seen.has(r.date) && r.open>0){ seen.add(r.date); out.push(r); } }
+  return out;
+}
+
+async function fetchNaver(code, ownProxyBase){
+  const end = new Date();
+  const start = new Date(); start.setDate(start.getDate()-220);
+  const sParam = fmtDate(start), eParam = fmtDate(end);
+  const naverUrl = `https://api.finance.naver.com/siseJson.naver?symbol=${code}&requestType=1&startTime=${sParam}&endTime=${eParam}&timeframe=day`;
+  const attempts = [];
+  if (ownProxyBase){
+    const base = ownProxyBase.trim().replace(/\/$/, '');
+    attempts.push(`${base}?symbol=${code}&startTime=${sParam}&endTime=${eParam}&timeframe=day`);
+  }
+  attempts.push(`https://api.allorigins.win/raw?url=${encodeURIComponent(naverUrl)}`);
+  attempts.push(`https://corsproxy.io/?url=${encodeURIComponent(naverUrl)}`);
+  let lastErr;
+  for (const p of attempts){
+    try{
+      const res = await fetch(p, {cache:'no-store'});
+      if(!res.ok) throw new Error('HTTP '+res.status);
+      const text = await res.text();
+      const rows = extractRows(text);
+      if (rows.length > 5) return rows;
+      lastErr = new Error('데이터가 비어있음');
+    } catch(e){ lastErr = e; }
+  }
+  throw lastErr || new Error('알 수 없는 오류');
+}
+
+function avg(arr){ return arr.reduce((a,b)=>a+b,0)/arr.length; }
+
+function computeSignals(rows, p){
+  const n = rows.length;
+  const out = rows.map(r => ({...r}));
+  for (let i=0;i<n;i++){
+    const r = out[i];
+    r.volMA = i>=p.N ? avg(out.slice(i-p.N,i).map(x=>x.volume)) : null;
+    r.volRatio = r.volMA ? r.volume/r.volMA : null;
+    r.periodHigh = i>=p.period ? Math.max(...out.slice(i-p.period,i).map(x=>x.high)) : null;
+    r.periodLow  = i>=p.period ? Math.min(...out.slice(i-p.period,i).map(x=>x.low))  : null;
+    const volSpike = r.volRatio!=null && r.volRatio >= p.mult;
+    const bullish = r.close > r.open;
+    const bearish = r.close < r.open;
+    const candlePos = (r.high>r.low) ? (r.close-r.low)/(r.high-r.low) : null;
+    r.candlePos = candlePos;
+    const breakout = r.periodHigh!=null && r.close > r.periodHigh;
+    const breakdown = r.periodLow!=null && r.close < r.periodLow;
+    const nearLow  = r.periodLow!=null  && r.close <= r.periodLow*(1+p.lowPct);
+    const nearHigh = r.periodHigh!=null && r.close >= r.periodHigh*(1-p.highPct);
+    const strongCandle = candlePos!=null && candlePos >= p.candle;
+    const weakCandle   = candlePos!=null && candlePos <= p.weak;
+    r.buy1 = !!(breakout && bullish && volSpike);
+    r.buy2 = !!(nearLow && volSpike && strongCandle);
+    r.buy  = r.buy1 || r.buy2;
+    r.sell1 = !!(breakdown && bearish && volSpike);
+    r.sell2 = !!(nearHigh && volSpike && weakCandle);
+    r.sell  = r.sell1 || r.sell2;
+  }
+  return out;
+}
+
+function filterDisplay(rows, periodMode){
+  if (periodMode === '60d') return rows.slice(-60);
+  const cutoff = new Date(); cutoff.setDate(cutoff.getDate()-90);
+  const cutoffStr = fmtDate(cutoff);
+  return rows.filter(r=> r.date >= cutoffStr);
+}
+
+function addCode(){
+  const code = els.codeInput.value.trim();
+  if (!/^\d{6}$/.test(code)){ setStatus('종목코드는 숫자 6자리로 입력해주세요.', 'err'); return; }
+  if (watchlist.includes(code)){ setStatus(`${code}는 이미 등록되어 있습니다.`, 'err'); return; }
+  watchlist.push(code);
+  store[code] = { status:'idle' };
+  els.codeInput.value = '';
+  renderChips();
+  renderGrid();
+  setStatus(`${code} 추가됨 — [전체 조회]를 눌러 데이터를 가져오세요.`);
+}
+function removeCode(code){
+  watchlist = watchlist.filter(c=>c!==code);
+  delete store[code];
+  if (selectedCode === code){ selectedCode = null; els.detailPanel.style.display='none'; }
+  renderChips();
+  renderGrid();
+  renderTicker();
+}
+function renderChips(){
+  if (watchlist.length===0){
+    els.chipsRow.className = 'chips empty-hint';
+    els.chipsRow.innerHTML = '아직 등록된 종목이 없습니다.';
+    els.pasteCodeSelect.innerHTML = '';
+    return;
+  }
+  els.chipsRow.className = 'chips';
+  els.chipsRow.innerHTML = watchlist.map(c=>`<span class="chip">${c}<button data-code="${c}" class="rm" type="button">×</button></span>`).join('');
+  els.chipsRow.querySelectorAll('.rm').forEach(b=> b.addEventListener('click', ()=> removeCode(b.dataset.code)));
+  els.pasteCodeSelect.innerHTML = watchlist.map(c=>`<option value="${c}">${c}</option>`).join('');
+}
+
+async function fetchAll(){
+  if (watchlist.length===0){ setStatus('등록된 종목이 없습니다. 먼저 종목코드를 추가해주세요.', 'err'); return; }
+  els.fetchAllBtn.disabled = true;
+  const ownProxy = document.getElementById('p_proxy').value.trim();
+  const p = getParams();
+  let okCount = 0, errCount = 0;
+  for (const code of watchlist){
+    store[code] = { status:'loading' };
+    renderGrid();
+    setStatus(`조회 중... (${code})`);
+    try{
+      const raw = await fetchNaver(code, ownProxy);
+      const computed = computeSignals(raw, p);
+      const display = filterDisplay(computed, els.period.value);
+      store[code] = { status:'done', computed, display };
+      okCount++;
+    }catch(e){
+      store[code] = { status:'error', error: e.message };
+      errCount++;
+    }
+    renderGrid();
+    renderTicker();
+  }
+  els.fetchAllBtn.disabled = false;
+  setStatus(`전체 조회 완료 — 성공 ${okCount}건, 실패 ${errCount}건. 실패한 종목은 "기준값 설정"에서 데이터를 직접 붙여넣어 보완할 수 있습니다.`, errCount? 'err':'ok');
+}
+
+function runPaste(){
+  const code = els.pasteCodeSelect.value;
+  if (!code){ setStatus('붙여넣을 종목을 먼저 선택해주세요.', 'err'); return; }
+  const raw = extractRows(els.pasteBox.value);
+  if (raw.length < 5){ setStatus('붙여넣은 데이터에서 유효한 행을 찾지 못했습니다. 형식을 확인해주세요.', 'err'); return; }
+  const p = getParams();
+  const computed = computeSignals(raw, p);
+  const display = filterDisplay(computed, els.period.value);
+  store[code] = { status:'done', computed, display: display.length?display:computed.slice(-60) };
+  renderGrid();
+  renderTicker();
+  if (selectedCode === code) selectDetail(code);
+  setStatus(`${code} — 붙여넣은 데이터로 계산 완료 (${raw.length}거래일).`, 'ok');
+}
+
+function setStatus(msg, type){
+  els.status.textContent = msg;
+  els.status.className = 'status-line' + (type? ' '+type : '');
+}
+
+function badgeInfo(entry){
+  if (!entry || entry.status==='idle') return {cls:'', label:'대기 중', reason:'아직 조회되지 않았습니다.'};
+  if (entry.status==='loading') return {cls:'', label:'조회 중...', reason:''};
+  if (entry.status==='error') return {cls:'', label:'조회 실패', reason: entry.error || ''};
+  const last = entry.computed[entry.computed.length-1];
+  if (last.buy){
+    const reasons = [last.buy1&&'돌파형', last.buy2&&'투매반등형'].filter(Boolean).join(' · ');
+    return {cls:'buy', label:'매수 신호 ON', reason: reasons + ' · ' + toDisplayDate(last.date)};
+  }
+  if (last.sell){
+    const reasons = [last.sell1&&'붕괴형', last.sell2&&'고점분배형'].filter(Boolean).join(' · ');
+    return {cls:'sell', label:'매도 신호 ON', reason: reasons + ' · ' + toDisplayDate(last.date)};
+  }
+  return {cls:'', label:'신호 없음 (대기)', reason: toDisplayDate(last.date) + ' 종가 기준'};
+}
+
+function renderGrid(){
+  els.emptyPanel.style.display = watchlist.length ? 'none' : '';
+  els.gridPanel.style.display = watchlist.length ? '' : 'none';
+
+  els.stocksGrid.innerHTML = watchlist.map(code=>{
+    const entry = store[code];
+    const info = badgeInfo(entry);
+    const closeTxt = (entry && entry.computed) ? Math.round(entry.computed[entry.computed.length-1].close).toLocaleString() : '-';
+    const sel = selectedCode===code ? ' selected' : '';
+    return `<div class="stock-card ${info.cls}${sel}" data-code="${code}">
+      <div class="topline">
+        <span class="code">${code}</span>
+        <button class="removeX" data-code="${code}" type="button" title="삭제">×</button>
+      </div>
+      <div class="close mono">${closeTxt}</div>
+      <div class="badge ${info.cls||'none'}">${info.label}</div>
+      <div class="reason">${info.reason}</div>
+    </div>`;
+  }).join('');
+
+  els.stocksGrid.querySelectorAll('.removeX').forEach(b=>{
+    b.addEventListener('click', (ev)=>{ ev.stopPropagation(); removeCode(b.dataset.code); });
+  });
+  els.stocksGrid.querySelectorAll('.stock-card').forEach(card=>{
+    card.addEventListener('click', ()=> selectDetail(card.dataset.code));
+  });
+}
+
+function selectDetail(code){
+  const entry = store[code];
+  if (!entry || entry.status!=='done'){ setStatus(`${code}는 아직 데이터가 없습니다. 전체 조회를 먼저 실행해주세요.`, 'err'); return; }
+  selectedCode = code;
+  renderGrid();
+  els.detailPanel.style.display = '';
+  els.detailTitle.textContent = `${code} — 일별 신호 내역`;
+  const cols = ['날짜','시가','고가','저가','종가','거래량','거래량비율','매수','매도'];
+  els.tableHead.innerHTML = cols.map(c=>`<th>${c}</th>`).join('');
+  els.tableBody.innerHTML = entry.display.slice().reverse().map(r=>{
+    const buyPill = r.buy ? `<span class="pill buy">매수</span>` : `<span class="pill none">-</span>`;
+    const sellPill = r.sell ? `<span class="pill sell">매도</span>` : `<span class="pill none">-</span>`;
+    return `<tr>
+      <td>${toDisplayDate(r.date)}</td>
+      <td>${Math.round(r.open).toLocaleString()}</td>
+      <td>${Math.round(r.high).toLocaleString()}</td>
+      <td>${Math.round(r.low).toLocaleString()}</td>
+      <td>${Math.round(r.close).toLocaleString()}</td>
+      <td>${Math.round(r.volume).toLocaleString()}</td>
+      <td>${r.volRatio? r.volRatio.toFixed(2) : '-'}</td>
+      <td>${buyPill}</td>
+      <td>${sellPill}</td>
+    </tr>`;
+  }).join('');
+  els.detailPanel.scrollIntoView({behavior:'smooth', block:'nearest'});
+}
+
+function renderTicker(){
+  const doneEntries = watchlist.map(c=>({code:c, entry:store[c]})).filter(x=>x.entry && x.entry.status==='done');
+  if (doneEntries.length===0){
+    els.ticker.innerHTML = '<span>거래량 + 가격 패턴 기반 매수/매도 신호 모니터 — 종목을 추가하고 전체조회를 눌러주세요</span>';
+    return;
+  }
+  els.ticker.innerHTML = doneEntries.map(({code, entry})=>{
+    const last = entry.computed[entry.computed.length-1];
+    const sig = last.buy ? ' <span class="buyTxt">[매수]</span>' : (last.sell ? ' <span class="sellTxt">[매도]</span>' : '');
+    return `<span>${code} <b>${Math.round(last.close).toLocaleString()}</b>${sig}</span>`;
+  }).join('');
+}
+
+els.addBtn.addEventListener('click', addCode);
+els.codeInput.addEventListener('keydown', (e)=>{ if (e.key==='Enter') addCode(); });
+els.fetchAllBtn.addEventListener('click', fetchAll);
+els.pasteBtn.addEventListener('click', runPaste);
+
+els.codeInput.value = '446770';
+addCode();
+</script>
+</body>
+</html>
