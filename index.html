@@ -96,6 +96,9 @@
 
   footer{color:var(--muted);font-size:11.5px;line-height:1.7;margin-top:22px;border-top:1px solid var(--line);padding-top:16px;}
   .empty{color:var(--muted);font-size:13px;text-align:center;padding:30px 0;}
+  .chart-legend{display:flex;gap:16px;font-size:11.5px;color:var(--muted);margin-top:6px;}
+  .chart-legend span{display:inline-flex;align-items:center;gap:5px;}
+  .chart-legend i{width:9px;height:9px;border-radius:50%;display:inline-block;}
 </style>
 </head>
 <body>
@@ -119,8 +122,11 @@
       <div class="field">
         <label for="periodSelect">조회 기준</label>
         <select id="periodSelect">
-          <option value="90">최근 3개월</option>
-          <option value="60d">최근 60거래일</option>
+          <option value="30">최근 30거래일</option>
+          <option value="60" selected>최근 60거래일</option>
+          <option value="90">최근 90거래일</option>
+          <option value="120">최근 120거래일</option>
+          <option value="240">최근 240거래일</option>
         </select>
       </div>
       <button id="fetchAllBtn">전체 조회</button>
@@ -141,6 +147,10 @@
         <div class="field"><label>캔들 강도 기준(0~1)</label><input type="text" id="p_candle" value="0.6"></div>
         <div class="field"><label>고점 근접 허용범위(%)</label><input type="text" id="p_highpct" value="3"></div>
         <div class="field"><label>캔들 약세 기준(0~1)</label><input type="text" id="p_weak" value="0.4"></div>
+        <div class="field"><label>추세 변동 비교기간(일)</label><input type="text" id="p_trendn" value="20"></div>
+        <div class="field"><label>추세 이탈/상승 기준(%)</label><input type="text" id="p_trendpct" value="20"></div>
+        <div class="field"><label>이동평균1 기간(일)</label><input type="text" id="p_ma1" value="60"></div>
+        <div class="field"><label>이동평균2 기간(일)</label><input type="text" id="p_ma2" value="120"></div>
         <div class="field" style="grid-column:1/-1;">
           <label>프록시 서버 URL (선택 — 직접 배포한 서버리스 프록시가 있다면 입력)</label>
           <input type="text" id="p_proxy" style="width:100%;" placeholder="예: https://내프로젝트.vercel.app/api/stock">
@@ -169,6 +179,7 @@
 
   <div class="panel" id="detailPanel" style="display:none;">
     <h3 style="margin-bottom:12px;font-size:15px;" id="detailTitle">일별 신호 내역</h3>
+    <div id="chartContainer" style="margin-bottom:16px;"></div>
     <div class="table-scroll">
       <table>
         <thead><tr id="tableHead"></tr></thead>
@@ -178,7 +189,7 @@
   </div>
 
   <footer>
-    실시간 조회는 공개 CORS 프록시를 거쳐 네이버금융 데이터를 가져오며, 사내망·브라우저 정책에 따라 차단될 수 있습니다 — 그 경우 위 "기준값 설정"을 펼쳐 데이터를 직접 붙여넣어 주세요. 등록한 종목 목록은 새로고침하면 초기화됩니다(브라우저에 저장하지 않음).<br>
+    실시간 조회는 공개 CORS 프록시를 거쳐 네이버금융 일별시세를 가져오며, 사내망·브라우저 정책에 따라 차단될 수 있습니다 — 그 경우 위 "기준값 설정"을 펼쳐 데이터를 직접 붙여넣어 주세요. 등록한 종목 목록은 새로고침하면 초기화됩니다(브라우저에 저장하지 않음).<br>
     본 도구는 거래량·가격 패턴 기반의 기계적 보조 지표이며 투자 자문이 아닙니다. 최종 투자 판단과 책임은 본인에게 있습니다.
   </footer>
 </div>
@@ -201,13 +212,14 @@ const els = {
   stocksGrid: document.getElementById('stocksGrid'),
   detailPanel: document.getElementById('detailPanel'),
   detailTitle: document.getElementById('detailTitle'),
+  chartContainer: document.getElementById('chartContainer'),
   tableHead: document.getElementById('tableHead'),
   tableBody: document.getElementById('tableBody'),
   ticker: document.getElementById('tickerStrip'),
 };
 
-let watchlist = [];
-const store = {};
+let watchlist = [];           // ["446770", "005930", ...]
+const store = {};             // code -> {status, computed, display, error}
 let selectedCode = null;
 
 els.settingsBtn.addEventListener('click', () => { els.settingsDetails.open = !els.settingsDetails.open; });
@@ -221,6 +233,10 @@ function getParams(){
     candle: parseFloat(document.getElementById('p_candle').value) || 0.6,
     highPct: (parseFloat(document.getElementById('p_highpct').value) || 3) / 100,
     weak: parseFloat(document.getElementById('p_weak').value) || 0.4,
+    trendN: parseInt(document.getElementById('p_trendn').value) || 20,
+    trendPct: (parseFloat(document.getElementById('p_trendpct').value) || 20) / 100,
+    ma1: parseInt(document.getElementById('p_ma1').value) || 60,
+    ma2: parseInt(document.getElementById('p_ma2').value) || 120,
   };
 }
 
@@ -244,16 +260,26 @@ function extractRows(rawText){
   return out;
 }
 
-// 종목코드 -> 종목명 조회 (실패해도 조용히 무시 — 이름 없이 코드만 표시됨)
+async function fetchWithTimeout(url, ms){
+  const ctrl = new AbortController();
+  const t = setTimeout(()=> ctrl.abort(), ms);
+  try{
+    return await fetch(url, {cache:'no-store', signal: ctrl.signal});
+  } finally {
+    clearTimeout(t);
+  }
+}
+
 async function fetchStockName(code){
   const url = `https://api.stock.naver.com/stock/${code}/basic`;
   const attempts = [
     `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
     `https://corsproxy.io/?url=${encodeURIComponent(url)}`,
+    `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`,
   ];
   for (const p of attempts){
     try{
-      const res = await fetch(p, {cache:'no-store'});
+      const res = await fetchWithTimeout(p, 8000);
       if(!res.ok) continue;
       const text = await res.text();
       const m = text.match(/"stockName"\s*:\s*"([^"]+)"/)
@@ -268,7 +294,7 @@ async function fetchStockName(code){
 
 async function fetchNaver(code, ownProxyBase){
   const end = new Date();
-  const start = new Date(); start.setDate(start.getDate()-220);
+  const start = new Date(); start.setDate(start.getDate()-600); // 240거래일 표시 + 지표 warmup 버퍼
   const sParam = fmtDate(start), eParam = fmtDate(end);
   const naverUrl = `https://api.finance.naver.com/siseJson.naver?symbol=${code}&requestType=1&startTime=${sParam}&endTime=${eParam}&timeframe=day`;
   const attempts = [];
@@ -278,16 +304,19 @@ async function fetchNaver(code, ownProxyBase){
   }
   attempts.push(`https://api.allorigins.win/raw?url=${encodeURIComponent(naverUrl)}`);
   attempts.push(`https://corsproxy.io/?url=${encodeURIComponent(naverUrl)}`);
+  attempts.push(`https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(naverUrl)}`);
   let lastErr;
   for (const p of attempts){
     try{
-      const res = await fetch(p, {cache:'no-store'});
+      const res = await fetchWithTimeout(p, 12000);
       if(!res.ok) throw new Error('HTTP '+res.status);
       const text = await res.text();
       const rows = extractRows(text);
       if (rows.length > 5) return rows;
       lastErr = new Error('데이터가 비어있음');
-    } catch(e){ lastErr = e; }
+    } catch(e){
+      lastErr = (e && e.name === 'AbortError') ? new Error('응답 시간 초과(프록시 지연)') : e;
+    }
   }
   throw lastErr || new Error('알 수 없는 오류');
 }
@@ -297,6 +326,7 @@ function avg(arr){ return arr.reduce((a,b)=>a+b,0)/arr.length; }
 function computeSignals(rows, p){
   const n = rows.length;
   const out = rows.map(r => ({...r}));
+  const maxMa = Math.max(p.ma1, p.ma2);
   for (let i=0;i<n;i++){
     const r = out[i];
     r.volMA = i>=p.N ? avg(out.slice(i-p.N,i).map(x=>x.volume)) : null;
@@ -316,19 +346,40 @@ function computeSignals(rows, p){
     const weakCandle   = candlePos!=null && candlePos <= p.weak;
     r.buy1 = !!(breakout && bullish && volSpike);
     r.buy2 = !!(nearLow && volSpike && strongCandle);
-    r.buy  = r.buy1 || r.buy2;
+
+    r.trendRefClose = i>=p.trendN ? out[i-p.trendN].close : null;
+    r.trendPct = r.trendRefClose ? (r.close - r.trendRefClose) / r.trendRefClose : null;
+    r.buy3  = r.trendPct!=null && r.trendPct >= p.trendPct;
+    r.sell3 = r.trendPct!=null && r.trendPct <= -p.trendPct;
+
+    r.ma1v = i>=p.ma1-1 ? avg(out.slice(i-p.ma1+1, i+1).map(x=>x.close)) : null;
+    r.ma2v = i>=p.ma2-1 ? avg(out.slice(i-p.ma2+1, i+1).map(x=>x.close)) : null;
+    let crossUp = false, crossDown = false;
+    if (i>=maxMa){
+      const prev = out[i-1];
+      if (prev.ma1v!=null && r.ma1v!=null){
+        if (prev.close < prev.ma1v && r.close >= r.ma1v) crossUp = true;
+        if (prev.close >= prev.ma1v && r.close < r.ma1v) crossDown = true;
+      }
+      if (prev.ma2v!=null && r.ma2v!=null){
+        if (prev.close < prev.ma2v && r.close >= r.ma2v) crossUp = true;
+        if (prev.close >= prev.ma2v && r.close < r.ma2v) crossDown = true;
+      }
+    }
+    r.buy4 = crossUp;
+    r.sell4 = crossDown;
+
+    r.buy  = r.buy1 || r.buy2 || r.buy3 || r.buy4;
     r.sell1 = !!(breakdown && bearish && volSpike);
     r.sell2 = !!(nearHigh && volSpike && weakCandle);
-    r.sell  = r.sell1 || r.sell2;
+    r.sell  = r.sell1 || r.sell2 || r.sell3 || r.sell4;
   }
   return out;
 }
 
 function filterDisplay(rows, periodMode){
-  if (periodMode === '60d') return rows.slice(-60);
-  const cutoff = new Date(); cutoff.setDate(cutoff.getDate()-90);
-  const cutoffStr = fmtDate(cutoff);
-  return rows.filter(r=> r.date >= cutoffStr);
+  const n = parseInt(periodMode) || 60;
+  return rows.slice(-n);
 }
 
 function addCode(){
@@ -427,11 +478,11 @@ function badgeInfo(entry){
   if (entry.status==='error') return {cls:'', label:'조회 실패', reason: entry.error || ''};
   const last = entry.computed[entry.computed.length-1];
   if (last.buy){
-    const reasons = [last.buy1&&'돌파형', last.buy2&&'투매반등형'].filter(Boolean).join(' · ');
+    const reasons = [last.buy1&&'돌파형', last.buy2&&'투매반등형', last.buy3&&'추세상승형', last.buy4&&'골든크로스'].filter(Boolean).join(' · ');
     return {cls:'buy', label:'매수 신호 ON', reason: reasons + ' · ' + toDisplayDate(last.date)};
   }
   if (last.sell){
-    const reasons = [last.sell1&&'붕괴형', last.sell2&&'고점분배형'].filter(Boolean).join(' · ');
+    const reasons = [last.sell1&&'붕괴형', last.sell2&&'고점분배형', last.sell3&&'추세이탈형', last.sell4&&'데드크로스'].filter(Boolean).join(' · ');
     return {cls:'sell', label:'매도 신호 ON', reason: reasons + ' · ' + toDisplayDate(last.date)};
   }
   return {cls:'', label:'신호 없음 (대기)', reason: toDisplayDate(last.date) + ' 종가 기준'};
@@ -471,6 +522,47 @@ function updateDetailTitle(){
   els.detailTitle.textContent = `${selectedCode}${nm} — 일별 신호 내역`;
 }
 
+function buildChartSVG(rows){
+  const w = 600, h = 170, padX = 8, padY = 12;
+  const closes = rows.map(r=>r.close);
+  const min = Math.min(...closes), max = Math.max(...closes);
+  const range = (max - min) || 1;
+  const n = rows.length;
+  const stepX = n > 1 ? (w - 2*padX) / (n - 1) : 0;
+  const pts = rows.map((r,i)=>{
+    const x = padX + i*stepX;
+    const y = padY + (h - 2*padY) * (1 - (r.close - min) / range);
+    return { x, y, r };
+  });
+  const line = pts.map((p,i)=> (i===0?'M':'L') + p.x.toFixed(1) + ',' + p.y.toFixed(1)).join(' ');
+  const area = line + ` L${pts[n-1].x.toFixed(1)},${(h-padY).toFixed(1)} L${pts[0].x.toFixed(1)},${(h-padY).toFixed(1)} Z`;
+  const markers = pts.filter(p=> p.r.buy || p.r.sell).map(p=>{
+    const color = p.r.buy ? '#2BD576' : '#FF5470';
+    const label = p.r.buy ? '매수' : '매도';
+    return `<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="4" fill="${color}" stroke="#0B1220" stroke-width="1.4"><title>${toDisplayDate(p.r.date)} · ${Math.round(p.r.close).toLocaleString()} · ${label}</title></circle>`;
+  }).join('');
+  return `<svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" style="width:100%;height:160px;display:block;">
+    <path d="${area}" fill="rgba(242,184,75,0.10)" stroke="none"></path>
+    <path d="${line}" fill="none" stroke="#F2B84B" stroke-width="2"></path>
+    ${markers}
+  </svg>`;
+}
+
+function renderChart(rows){
+  const first = rows[0], last = rows[rows.length-1];
+  const chg = last.close - first.close;
+  const chgPct = first.close ? (chg/first.close*100) : 0;
+  const chgColor = chg>0 ? 'var(--buy)' : (chg<0 ? 'var(--sell)' : 'var(--muted)');
+  els.chartContainer.innerHTML = `
+    ${buildChartSVG(rows)}
+    <div class="chart-legend">
+      <span>${toDisplayDate(first.date)} ~ ${toDisplayDate(last.date)}</span>
+      <span style="color:${chgColor};font-weight:600;">${chg>=0?'+':''}${Math.round(chg).toLocaleString()} (${chgPct.toFixed(1)}%)</span>
+      <span><i style="background:#2BD576;"></i>매수신호일</span>
+      <span><i style="background:#FF5470;"></i>매도신호일</span>
+    </div>`;
+}
+
 function selectDetail(code){
   const entry = store[code];
   if (!entry || entry.status!=='done'){ setStatus(`${code}는 아직 데이터가 없습니다. 전체 조회를 먼저 실행해주세요.`, 'err'); return; }
@@ -478,6 +570,7 @@ function selectDetail(code){
   renderGrid();
   els.detailPanel.style.display = '';
   updateDetailTitle();
+  renderChart(entry.display);
   const cols = ['날짜','시가','고가','저가','종가','거래량','거래량비율','매수','매도'];
   els.tableHead.innerHTML = cols.map(c=>`<th>${c}</th>`).join('');
   els.tableBody.innerHTML = entry.display.slice().reverse().map(r=>{
@@ -507,8 +600,7 @@ function renderTicker(){
   els.ticker.innerHTML = doneEntries.map(({code, entry})=>{
     const last = entry.computed[entry.computed.length-1];
     const sig = last.buy ? ' <span class="buyTxt">[매수]</span>' : (last.sell ? ' <span class="sellTxt">[매도]</span>' : '');
-    const nm = entry.name ? ` ${entry.name}` : '';
-    return `<span>${code}${nm} <b>${Math.round(last.close).toLocaleString()}</b>${sig}</span>`;
+    return `<span>${code} <b>${Math.round(last.close).toLocaleString()}</b>${sig}</span>`;
   }).join('');
 }
 
