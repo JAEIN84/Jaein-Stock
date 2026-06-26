@@ -1,2 +1,2 @@
-# Stock-Signal
+# Jaein-Stock
 Volume Signal Monitor
