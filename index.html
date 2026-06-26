@@ -597,12 +597,15 @@ function addCode(){
   watchlist.push(code);
   store[code] = { status:'idle' };
   els.codeInput.value = '';
+  els.nameSearchInput.value = '';        // 추가: 이전 이름검색 입력값 정리
+  renderNameSearchResults([], '');        // 추가: 이전 이름검색 드롭다운 정리(잔여 표시 버그 수정)
   renderChips();
   renderGrid();
   setStatus(`${code} 추가됨 — [전체 조회]를 눌러 데이터를 가져오세요.`);
   saveWatchlist(); // 추가: 저장
   const ownProxy = document.getElementById('p_proxy').value.trim();
-  fetchStockName(code, ownProxy).then(name=>{
+  resolveNameForCode(code, ownProxy).then(async name=>{
+    if (!name) name = await fetchStockName(code, ownProxy); // 캐시에 없으면 단건 조회로 보완
     if (name && store[code]){
       store[code].name = name;
       renderChips();
@@ -1063,8 +1066,37 @@ const nameSearchPagesFetched = { KOSPI: 0, KOSDAQ: 0 };
 let nameSearchAbort = null;
 const MAX_NAME_SEARCH_PAGES_PER_MARKET = 40; // 시장당 약 2,000종목까지 탐색
 
-function matchesQuery(item, q){
-  return item.name.toLowerCase().includes(q) || item.code.toLowerCase().includes(q);
+// 코드로 추가할 때도 "전종목 스캔/이름검색"과 동일하게 검증된 mode=list
+// 목록에서 이름을 찾는다 — mode=name(단건 조회) 단독 경로는 스키마가
+// 불안정해 이름이 안 보이는 문제가 있었음.
+function findCodeInCache(code){
+  const all = nameSearchCache.KOSPI.concat(nameSearchCache.KOSDAQ);
+  const hit = all.find(it=> it.code === code);
+  return hit ? hit.name : null;
+}
+async function resolveNameForCode(code, proxyBase){
+  let hit = findCodeInCache(code);
+  if (hit) return hit;
+  if (!proxyBase) return null;
+  const markets = ['KOSPI', 'KOSDAQ'];
+  let mi = 0;
+  while (
+    nameSearchPagesFetched.KOSPI < MAX_NAME_SEARCH_PAGES_PER_MARKET ||
+    nameSearchPagesFetched.KOSDAQ < MAX_NAME_SEARCH_PAGES_PER_MARKET
+  ){
+    const market = markets[mi % 2]; mi++;
+    if (nameSearchPagesFetched[market] >= MAX_NAME_SEARCH_PAGES_PER_MARKET) continue;
+    const nextPage = nameSearchPagesFetched[market] + 1;
+    let rows;
+    try{ rows = await fetchListPage(market, nextPage, proxyBase); }
+    catch(e){ break; } // 목록 수집 실패 시 조용히 중단(호출 측에서 단건 조회로 보완)
+    nameSearchPagesFetched[market] = nextPage;
+    if (!rows.length) continue;
+    nameSearchCache[market].push(...rows);
+    const found = rows.find(it=> it.code === code);
+    if (found) return found.name;
+  }
+  return null;
 }
 
 function renderNameSearchResults(items, statusMsg){
@@ -1116,6 +1148,9 @@ document.addEventListener('click', (ev)=>{
   }
 });
 
+function matchesQuery(item, q){
+  return item.name.toLowerCase().includes(q) || item.code.toLowerCase().includes(q);
+}
 async function runNameSearch(qOriginal){
   const q = qOriginal.toLowerCase();
   const proxyBase = document.getElementById('p_proxy').value.trim();
@@ -1205,6 +1240,7 @@ function renderTicker(){
 
 els.addBtn.addEventListener('click', addCode);
 els.codeInput.addEventListener('keydown', (e)=>{ if (e.key==='Enter') addCode(); });
+els.codeInput.addEventListener('focus', ()=>{ els.nameSearchResults.style.display = 'none'; });
 els.fetchAllBtn.addEventListener('click', fetchAll);
 els.pasteBtn.addEventListener('click', runPaste);
 
