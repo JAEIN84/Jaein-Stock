@@ -277,10 +277,29 @@
       <button class="secondary" id="runBacktestBtn" type="button">백테스트 실행</button>
     </div>
     <div class="bt-summary-grid" id="backtestSummary"></div>
+    <div class="bt-summary-grid" id="backtestPnL" style="margin-top:10px;"></div>
     <div class="table-scroll" style="margin-top:14px;max-height:280px;">
       <table>
         <thead><tr><th>신호일</th><th>유형</th><th>신호가</th><th>N일후가</th><th>N일후날짜</th><th>수익률</th></tr></thead>
         <tbody id="backtestBody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- 백테스트 보완: N별 비교 + 기준선(Baseline) 비교 -->
+  <div class="panel" id="backtestMultiNPanel">
+    <h3 style="margin-bottom:4px;font-size:15px;">N별 비교 + 기준선(Baseline) 검증</h3>
+    <div class="bt-note">
+      "기준선"은 신호와 무관하게 해당 종목의 모든 거래일에서 N거래일 후 가격 변화율을 평균낸 값입니다 (이 종목을 그냥 계속 들고만 있었을 때의 평균적인 N일 변동). 알파(α)는 "신호 평균 - 기준선 평균"으로, 양수(+)면 신호가 기준선보다 우위가 있다는 뜻이고, 0에 가깝거나 음수면 신호가 종목 자체의 추세를 따라간 것에 불과할 가능성이 있습니다. 매도신호는 하락이 유리하므로 알파를 "기준선 - 신호 평균"으로 반대로 계산합니다.
+    </div>
+    <div class="table-scroll" style="margin-top:14px;max-height:320px;">
+      <table>
+        <thead><tr>
+          <th>보유일(N)</th>
+          <th>매수건수</th><th>매수평균(신호)</th><th>평균(기준선)</th><th>알파(매수)</th>
+          <th>매도건수</th><th>매도평균(신호)</th><th>알파(매도)</th>
+        </tr></thead>
+        <tbody id="backtestMultiNBody"></tbody>
       </table>
     </div>
   </div>
@@ -320,7 +339,9 @@ const els = {
   // 추가: 백테스트 / 리셋 관련
   backtestPanel: document.getElementById('backtestPanel'),
   backtestSummary: document.getElementById('backtestSummary'),
+  backtestPnL: document.getElementById('backtestPnL'),
   backtestBody: document.getElementById('backtestBody'),
+  backtestMultiNBody: document.getElementById('backtestMultiNBody'),
   runBacktestBtn: document.getElementById('runBacktestBtn'),
   resetAllBtn: document.getElementById('resetAllBtn'),
   // 추가: 전종목 스캔
@@ -800,13 +821,63 @@ function runBacktest(entry, holdDays){
     if (targetIdx >= rows.length) continue; // 아직 N일이 지나지 않은 최근 신호는 제외
     const future = rows[targetIdx];
     const retPct = (future.close - r.close) / r.close * 100;
+    // 보유기간 중(신호일 다음날 ~ N일후) 경로상 최저/최고 변동률 — MDD/MAE 계산용
+    let pathMin = 0, pathMax = 0;
+    for (let k=i+1; k<=targetIdx; k++){
+      const pct = (rows[k].close - r.close) / r.close * 100;
+      if (pct < pathMin) pathMin = pct;
+      if (pct > pathMax) pathMax = pct;
+    }
     results.push({
       date: r.date, type: r.buy ? '매수' : '매도',
       entryClose: r.close, exitClose: future.close, exitDate: future.date,
-      retPct
+      retPct, pathMin, pathMax
     });
   }
   return results;
+}
+/* 기준선(Baseline): 신호와 무관하게 전체 거래일에서 N일후 변화율 평균 — 신호의 alpha 검증용 */
+function computeBaseline(rows, holdDays){
+  let count=0, upCount=0, sumRet=0;
+  for (let i=0;i<rows.length;i++){
+    const targetIdx = i + holdDays;
+    if (targetIdx >= rows.length) continue;
+    const ret = (rows[targetIdx].close - rows[i].close) / rows[i].close * 100;
+    sumRet += ret;
+    if (ret > 0) upCount++;
+    count++;
+  }
+  if (!count) return null;
+  return { count, avgRet: sumRet/count, upRate: upCount/count*100 };
+}
+/* 손익비(Profit Factor) + MDD/MAE: 승/패 거래 분리, 평균이익/평균손실/손익비, 보유기간 중 최악 경로 */
+function computePnLStats(arr, isBuy){
+  if (!arr.length) return null;
+  const wins = arr.filter(x => isBuy ? x.retPct > 0 : x.retPct < 0);
+  const losses = arr.filter(x => isBuy ? x.retPct <= 0 : x.retPct >= 0);
+  const avgWin = wins.length ? wins.reduce((a,b)=>a+b.retPct,0)/wins.length : 0;
+  const avgLoss = losses.length ? losses.reduce((a,b)=>a+b.retPct,0)/losses.length : 0;
+  const sumWinAbs = wins.reduce((a,b)=>a+Math.abs(b.retPct),0);
+  const sumLossAbs = losses.reduce((a,b)=>a+Math.abs(b.retPct),0);
+  const profitFactor = sumLossAbs > 0 ? sumWinAbs/sumLossAbs : (sumWinAbs > 0 ? Infinity : 0);
+  // 매수: 보유기간 중 최저점(낙폭) / 매도: 보유기간 중 최고점(역행·놓친 상승분)
+  const excField = isBuy ? 'pathMin' : 'pathMax';
+  const excs = arr.map(x => x[excField]);
+  const avgExc = excs.reduce((a,b)=>a+b,0)/excs.length;
+  const worstExc = isBuy ? Math.min(...excs) : Math.max(...excs);
+  return { winCount: wins.length, lossCount: losses.length, avgWin, avgLoss, profitFactor, avgExc, worstExc };
+}
+/* N별 비교 + 기준선 알파 계산 */
+function compareWithBaseline(entry, holdList){
+  const rows = entry.computed;
+  return holdList.map(hold=>{
+    const results = runBacktest(entry, hold);
+    const summary = summarizeBacktest(results);
+    const baseline = computeBaseline(rows, hold);
+    const buyAlpha = (summary.buy && baseline) ? (summary.buy.avg - baseline.avgRet) : null;
+    const sellAlpha = (summary.sell && baseline) ? (baseline.avgRet - summary.sell.avg) : null; // 매도는 하락이 유리 → 반대 방향
+    return { hold, buy: summary.buy, sell: summary.sell, baseline, buyAlpha, sellAlpha };
+  });
 }
 function summarizeBacktest(results){
   function stats(arr, winCond){
@@ -830,6 +901,41 @@ function renderBacktestSummaryCard(label, s){
     <div class="val ${valCls}">${s.avg>=0?'+':''}${s.avg.toFixed(2)}%</div>
     <div class="lbl" style="margin-top:4px;">승률 ${s.winRate.toFixed(0)}%</div>
   </div>`;
+}
+function renderPnLCard(label, s, isBuy){
+  if (!s) return `<div class="bt-card"><div class="lbl">${label} 손익비 분석</div><div class="val" style="color:var(--muted);font-size:13px;">신호 없음</div></div>`;
+  const pfDisplay = s.profitFactor===Infinity ? '∞' : s.profitFactor.toFixed(2);
+  const excLabel = isBuy ? '평균 최대낙폭(MDD)' : '평균 최대역행(상승)';
+  const worstLabel = isBuy ? '최악 낙폭' : '최악 역행';
+  return `<div class="bt-card">
+    <div class="lbl">${label} 손익비 분석</div>
+    <div class="val" style="font-size:16px;">승 ${s.winCount} / 패 ${s.lossCount}</div>
+    <div class="lbl" style="margin-top:6px;">평균이익(승) <span style="color:var(--buy);font-weight:600;">+${s.avgWin.toFixed(2)}%</span> · 평균손실(패) <span style="color:var(--sell);font-weight:600;">${s.avgLoss.toFixed(2)}%</span></div>
+    <div class="lbl" style="margin-top:4px;">손익비(Profit Factor) <b>${pfDisplay}</b></div>
+    <div class="lbl" style="margin-top:4px;">${excLabel} <span style="color:var(--sell);">${s.avgExc.toFixed(2)}%</span> · ${worstLabel} <span style="color:var(--sell);font-weight:600;">${s.worstExc.toFixed(2)}%</span></div>
+  </div>`;
+}
+function renderMultiNTable(rowsData){
+  if (!rowsData.length) return '<tr><td colspan="8" style="text-align:center;color:var(--muted);padding:14px 0;">데이터 없음</td></tr>';
+  const fmt = (v)=> v==null ? '-' : (v>=0?'+':'')+v.toFixed(2)+'%';
+  const fmtAlpha = (v)=>{
+    if (v==null) return '-';
+    const cls = v>0 ? 'color:var(--buy);font-weight:600;' : (v<0?'color:var(--sell);font-weight:600;':'color:var(--muted);');
+    return `<span style="${cls}">${v>=0?'+':''}${v.toFixed(2)}%p</span>`;
+  };
+  return rowsData.map(d=>{
+    const buy = d.buy, sell = d.sell, bl = d.baseline;
+    return `<tr>
+      <td>${d.hold}일</td>
+      <td>${buy?buy.count:0}</td>
+      <td>${buy?fmt(buy.avg):'-'}</td>
+      <td>${bl?fmt(bl.avgRet):'-'}</td>
+      <td>${fmtAlpha(d.buyAlpha)}</td>
+      <td>${sell?sell.count:0}</td>
+      <td>${sell?fmt(sell.avg):'-'}</td>
+      <td>${fmtAlpha(d.sellAlpha)}</td>
+    </tr>`;
+  }).join('');
 }
 function populateBacktestSelect(){
   const doneList = watchlist.filter(c => store[c] && store[c].status === 'done');
@@ -858,6 +964,14 @@ function refreshBacktest(){
   els.backtestSummary.innerHTML =
     renderBacktestSummaryCard(`매수신호 → ${hold}거래일 후`, summary.buy) +
     renderBacktestSummaryCard(`매도신호 → ${hold}거래일 후`, summary.sell);
+
+  // 보완 3) 손익비(Profit Factor) + MDD/MAE
+  const pnlBuy = computePnLStats(results.filter(x=>x.type==='매수'), true);
+  const pnlSell = computePnLStats(results.filter(x=>x.type==='매도'), false);
+  els.backtestPnL.innerHTML =
+    renderPnLCard('매수신호', pnlBuy, true) +
+    renderPnLCard('매도신호', pnlSell, false);
+
   const sorted = results.slice().sort((a,b)=> b.date.localeCompare(a.date));
   els.backtestBody.innerHTML = sorted.map(x=>{
     const pillCls = x.type==='매수' ? 'buy' : 'sell';
@@ -872,6 +986,11 @@ function refreshBacktest(){
       <td style="color:${retColor};font-weight:600;">${x.retPct>=0?'+':''}${x.retPct.toFixed(2)}%</td>
     </tr>`;
   }).join('') || `<tr><td colspan="6" style="text-align:center;color:var(--muted);padding:18px 0;">해당 보유일수로 평가 가능한 신호가 없습니다. 조회기간을 늘리거나 보유일수를 줄여보세요.</td></tr>`;
+
+  // 보완 1+2) N별 비교 + 기준선(Baseline) 검증 — 현재 입력한 보유일수도 목록에 포함
+  const nList = Array.from(new Set([1,3,5,10,20,hold])).sort((a,b)=>a-b);
+  const multiN = compareWithBaseline(entry, nList);
+  els.backtestMultiNBody.innerHTML = renderMultiNTable(multiN);
 }
 els.runBacktestBtn.addEventListener('click', refreshBacktest);
 els.btCodeSelect.addEventListener('change', refreshBacktest);
